@@ -216,6 +216,11 @@ function updateCardById(cards, cardId, updates) {
   );
 }
 
+function deleteCardById(cards, cardId) {
+  return cards.filter((card) => card.id !== cardId);
+}
+
+
 function filterCards(cards, query) {
   const q = normaliseKey(query);
   if (!q) return cards;
@@ -254,6 +259,10 @@ function runSelfTests() {
   console.assert(edited[0].pt === "novo" && edited[0].en === "new", "Editing should update Portuguese and English fields");
   console.assert(edited[0].example === "new example", "Editing should update the example field");
   console.assert(edited[0].correct === 3, "Editing should preserve SRS progress and statistics");
+
+  const deleted = deleteCardById([makeCard("a", "a", "", "delete-me"), makeCard("b", "b", "", "keep-me")], "delete-me");
+  console.assert(deleted.length === 1 && deleted[0].id === "keep-me", "Deleting should remove only the selected card");
+
 
   const filteredByPt = filterCards([makeCard("o peito", "the chest"), makeCard("o calcanhar", "the heel")], "peito");
   console.assert(filteredByPt.length === 1 && filteredByPt[0].pt === "o peito", "Search should filter by Portuguese text");
@@ -314,7 +323,7 @@ function StatCard({ value, label }) {
   );
 }
 
-function CardRow({ card, isEditing, editPt, editEn, editExample, onEditPt, onEditEn, onEditExample, onStartEdit, onSave, onCancel }) {
+function CardRow({ card, isEditing, isConfirmingDelete, editPt, editEn, editExample, onEditPt, onEditEn, onEditExample, onStartEdit, onSave, onCancel, onRequestDelete, onConfirmDelete, onCancelDelete }) {
   if (isEditing) {
     return (
       <tr className="border-b last:border-0">
@@ -341,7 +350,19 @@ function CardRow({ card, isEditing, editPt, editEn, editExample, onEditPt, onEdi
       <td className="py-2 pr-3">{formatDateTime(card.due)}</td>
       <td className="py-2 pr-3">{card.interval ? `${card.interval.toFixed(2)}d` : "new"}</td>
       <td className="py-2 pr-3">{card.correct ?? 0} / {card.wrong ?? 0}</td>
-      <td className="py-2 pr-3"><Button variant="outline" onClick={() => onStartEdit(card)}>Edit</Button></td>
+      <td className="py-2 pr-3">
+        {isConfirmingDelete ? (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="danger" onClick={() => onConfirmDelete(card)}>Confirm</Button>
+            <Button variant="outline" onClick={onCancelDelete}>Cancel</Button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => onStartEdit(card)}>Edit</Button>
+            <Button variant="danger" onClick={() => onRequestDelete(card)}>Delete</Button>
+          </div>
+        )}
+      </td>
     </tr>
   );
 }
@@ -363,6 +384,7 @@ export default function PortugueseSRSFlashcards() {
   const [newExample, setNewExample] = useState("");
   const [message, setMessage] = useState("");
   const [editingId, setEditingId] = useState(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [editPt, setEditPt] = useState("");
   const [editEn, setEditEn] = useState("");
@@ -407,6 +429,14 @@ export default function PortugueseSRSFlashcards() {
     window.speechSynthesis.speak(utterance);
   }
 
+  function revealAnswer() {
+    const nextShowAnswer = !showAnswer;
+    setShowAnswer(nextShowAnswer);
+    if (nextShowAnswer && current && frontMode === "en") {
+      speak(current.pt);
+    }
+  }
+
   function review(quality) {
     if (!current) return;
     setCards((prev) => prev.map((card) => (card.id === current.id ? calculateNext(card, quality) : card)));
@@ -419,6 +449,7 @@ export default function PortugueseSRSFlashcards() {
       setMessage("Add both Portuguese and English before saving a card.");
       return;
     }
+
     setCards((prev) => mergeCardsWithoutDuplicates(prev, [makeCard(newPt, newEn, newExample)]));
     setNewPt("");
     setNewEn("");
@@ -448,6 +479,7 @@ export default function PortugueseSRSFlashcards() {
   }
 
   function startEditing(card) {
+    setDeleteConfirmId(null);
     setEditingId(card.id);
     setEditPt(card.pt);
     setEditEn(card.en);
@@ -480,6 +512,23 @@ export default function PortugueseSRSFlashcards() {
     setEditEn("");
     setEditExample("");
     setMessage("Card updated. SRS progress was preserved.");
+  }
+
+  function requestDeleteCard(card) {
+    setEditingId(null);
+    setDeleteConfirmId(card.id);
+    setMessage(`Confirm deletion: ${card.pt}`);
+  }
+
+  function cancelDeleteCard() {
+    setDeleteConfirmId(null);
+    setMessage("Delete cancelled.");
+  }
+
+  function confirmDeleteCard(card) {
+    setCards((prev) => deleteCardById(prev, card.id));
+    setDeleteConfirmId(null);
+    setMessage(`Deleted: ${card.pt}`);
   }
 
   function resetProgress() {
@@ -549,7 +598,7 @@ export default function PortugueseSRSFlashcards() {
                   {showAnswer && current.example && <div className="mt-6 max-w-2xl text-lg italic text-slate-600">“{current.example}”</div>}
                   <div className="mt-8 flex flex-wrap justify-center gap-3">
                     <Button variant="outline" onClick={() => speak(current.pt)}>🔊 Read Portuguese</Button>
-                    <Button onClick={() => setShowAnswer(!showAnswer)}>{showAnswer ? "Hide answer" : "Show answer"}</Button>
+                    <Button onClick={revealAnswer}>{showAnswer ? "Hide answer" : "Show answer"}</Button>
                   </div>
                 </div>
                 {showAnswer && (
@@ -622,6 +671,7 @@ export default function PortugueseSRSFlashcards() {
                     key={card.id}
                     card={card}
                     isEditing={editingId === card.id}
+                    isConfirmingDelete={deleteConfirmId === card.id}
                     editPt={editPt}
                     editEn={editEn}
                     editExample={editExample}
@@ -631,6 +681,9 @@ export default function PortugueseSRSFlashcards() {
                     onStartEdit={startEditing}
                     onSave={saveEditing}
                     onCancel={cancelEditing}
+                    onRequestDelete={requestDeleteCard}
+                    onConfirmDelete={confirmDeleteCard}
+                    onCancelDelete={cancelDeleteCard}
                   />
                 ))}
               </tbody>
