@@ -1,85 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { RAW_INITIAL_CARDS } from "./data/initialCards";
 
-const STORAGE_KEY = "pt_srs_flashcards_v7";
+const STORAGE_KEY = "pt_srs_flashcards_v8_initial_deck_test";
 const TRANSLATION_NEEDED = "[translation needed]";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TEN_MINUTES_IN_DAYS = 10 / (24 * 60);
 const NEWLINE = String.fromCharCode(10);
 const TAB = String.fromCharCode(9);
 
-const RAW_TRANSLATIONS = [
-  ["a psicóloga", "the psychologist"],
-  ["bango enfermeiro", "male nurse / nurse"],
-  ["o cabeleireiro usa a tesoura", "the hairdresser uses scissors"],
-  ["o cozinheiro", "the cook / chef"],
-  ["Gelado de baunilha", "vanilla ice cream"],
-  ["as cerejas", "the cherries"],
-  ["o peito", "the chest / breast"],
-  ["o calcanhar", "the heel"],
-  ["A minha mãe prefere ler poesia", "my mother prefers reading poetry"],
-  ["o quartel dos bombeiros", "the fire station"],
-  ["a escova", "the brush"],
-  ["a agulha", "the needle"],
-  ["As muletas", "the crutches"],
-  ["Esta é a receita mais fácil de seguir", "this is the easiest recipe to follow"],
-  ["Há restos no frigorífico", "there are leftovers in the fridge"],
-  ["Aguarde um minuto, a doutora há de chamá-lo", "please wait a minute; the doctor will call you"],
-  ["Estou com vómitos", "I am vomiting / I have been vomiting"],
-  ["Estou a sangrar", "I am bleeding"],
-  ["Népia", "nope / no way"],
-  ["peso", "weight"],
-  ["Tens de ir à secretaria tratar desse assunto", "you have to go to the office to deal with that matter"],
-  ["o pelo", "the hair / fur"],
-  ["o proprietário", "the owner / landlord"],
-  ["a grua", "the crane"],
-  ["a esponja", "the sponge"],
-  ["unidade curricular", "course unit / curricular unit"],
-  ["Entregar-lhe-ei o ensaio amanhã", "I will hand in the essay to him/her tomorrow"],
-  ["validar", "to validate / confirm"],
-  ["vir ao de cima", "to come to the surface / become apparent"],
-  ["As campas", "the graves"],
-  ["deparar", "to come across / encounter"],
-  ["o nordeste", "the north-east"],
-  ["rapar o cabelo", "to shave one's hair / head"],
-  ["o feiticeiro", "the sorcerer / wizard"],
-  ["Meditação", "meditation"],
-  ["o modelo", "the model / template"],
-  ["vocês vêm", "you come / you are coming"],
-  ["vocês veem", "you see / you are seeing"],
-  ["graduado", "graduate / graduated"],
-  ["as meias", "the socks"],
-  ["a camisola", "the jumper / sweater / shirt"],
-  ["os calções", "the shorts"],
-  ["Roupa interior", "underwear"],
-  ["a camisa", "the shirt"],
-  ["o vestido", "the dress"],
-  ["o casaco", "the coat / jacket"],
-  ["o cinto", "the belt"],
-  ["as luvas", "the gloves"],
-  ["as calças", "the trousers"],
-  ["o fato", "the suit"],
-  ["as sandálias", "the sandals"],
-  ["a mosca", "the fly"],
-  ["o tubarão", "the shark"],
-  ["a galinha", "the hen / chicken"],
-  ["o urso", "the bear"],
-  ["a girafa", "the giraffe"],
-  ["o feijão", "the bean"],
-  ["o garfo", "the fork"],
-  ["a chávena", "the cup"],
-  ["Até lá", "see you then / until then"],
-];
-
 function normaliseKey(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
-
-const BUILT_IN_TRANSLATIONS = RAW_TRANSLATIONS.reduce((acc, pair) => {
-  const pt = pair[0];
-  const en = pair[1];
-  acc[normaliseKey(pt)] = en;
-  return acc;
-}, {});
 
 function makeId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -102,19 +33,13 @@ function makeCard(pt, en, example = "", id = makeId()) {
   };
 }
 
-const sampleCards = [
-  makeCard("a psicóloga", "the psychologist", "", "1"),
-  makeCard("Gelado de baunilha", "vanilla ice cream", "", "2"),
-  makeCard("as cerejas", "the cherries", "", "3"),
-  makeCard("o peito", "the chest / breast", "", "4"),
-  makeCard("o calcanhar", "the heel", "", "5"),
-  makeCard("vocês vêm", "you come / you are coming", "", "6"),
-  makeCard("vocês veem", "you see / you are seeing", "", "7"),
-  makeCard("vir ao de cima", "to come to the surface / become apparent", "", "8"),
-];
+const sampleCards = RAW_INITIAL_CARDS.map(([pt, en, example = ""], index) =>
+  makeCard(pt, en, example, String(index + 1))
+);
 
 function lookupTranslation(pt) {
-  return BUILT_IN_TRANSLATIONS[normaliseKey(pt)] || TRANSLATION_NEEDED;
+  const found = RAW_INITIAL_CARDS.find(([rawPt]) => normaliseKey(rawPt) === normaliseKey(pt));
+  return found ? found[1] : TRANSLATION_NEEDED;
 }
 
 function formatDateTime(ts) {
@@ -275,6 +200,10 @@ function runSelfTests() {
 
   const filteredAccent = filterCards([makeCard("a psicóloga", "the psychologist")], "PSICÓLOGA");
   console.assert(filteredAccent.length === 1, "Search should be case-insensitive and preserve accented matching");
+
+  console.assert(Array.isArray(RAW_INITIAL_CARDS), "Initial deck should be an array");
+  console.assert(RAW_INITIAL_CARDS.every((row) => Array.isArray(row) && row.length >= 2), "Each initial deck row should be [pt, en] or [pt, en, example]");
+  console.assert(sampleCards.length === RAW_INITIAL_CARDS.length, "Initial deck should be converted into sample cards");
 
   const wrong = calculateNext(makeCard("teste", "test"), 0);
   console.assert(wrong.wrong === 1 && wrong.correct === 0, "Wrong review should increase wrong count only");
