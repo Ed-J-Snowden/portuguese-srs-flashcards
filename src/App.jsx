@@ -378,6 +378,7 @@ export default function PortugueseSRSFlashcards() {
   const [message, setMessage] = useState("");
   const [syncStatus, setSyncStatus] = useState(supabase ? "Not signed in" : "Supabase not configured");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [session, setSession] = useState(null);
   const [voicesReady, setVoicesReady] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -453,28 +454,52 @@ export default function PortugueseSRSFlashcards() {
   }, [cards]);
 
 
-  async function signInWithEmail() {
+  async function signInWithPasswordAuth() {
     if (!supabase) {
       setMessage("Supabase is not configured.");
       return;
     }
-    if (!email.trim()) {
-      setMessage("Enter your email address first.");
+    if (!email.trim() || !password) {
+      setMessage("Enter your email and password first.");
       return;
     }
 
-    setSyncStatus("Sending login link...");
-    const { error } = await supabase.auth.signInWithOtp({
+    setSyncStatus("Signing in...");
+    const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
+      password,
     });
 
     if (error) {
-      setSyncStatus("Login failed");
+      setSyncStatus("Sign in failed");
       setMessage(error.message);
     } else {
-      setSyncStatus("Login link sent");
-      setMessage("Check your email for the Supabase login link.");
+      setSyncStatus("Signed in");
+      setMessage("Signed in successfully.");
+      setPassword("");
+    }
+  }
+
+  async function updatePassword() {
+    if (!supabase || !session?.user) {
+      setMessage("Sign in first before setting a password.");
+      return;
+    }
+    if (!password || password.length < 8) {
+      setMessage("Use a password with at least 8 characters.");
+      return;
+    }
+
+    setSyncStatus("Updating password...");
+    const { error } = await supabase.auth.updateUser({ password });
+
+    if (error) {
+      setSyncStatus("Password update failed");
+      setMessage(error.message);
+    } else {
+      setSyncStatus("Password updated");
+      setMessage("Password updated. You can now sign in on other devices with email and password.");
+      setPassword("");
     }
   }
 
@@ -726,13 +751,16 @@ export default function PortugueseSRSFlashcards() {
             {session?.user ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-slate-500">{session.user.email}</span>
+                <TextInput className="w-48" type="password" placeholder="New password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Button variant="outline" onClick={updatePassword}>Set password</Button>
                 <Button variant="outline" onClick={loadCloudState}>Sync now</Button>
                 <Button variant="outline" onClick={signOut}>Sign out</Button>
               </div>
             ) : (
-              <div className="flex w-full gap-2 md:w-[420px]">
-                <TextInput placeholder="Email for Magic Link" value={email} onChange={(e) => setEmail(e.target.value)} />
-                <Button onClick={signInWithEmail}>Sign in</Button>
+              <div className="flex w-full flex-col gap-2 md:w-[420px] md:flex-row">
+                <TextInput placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                <TextInput type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Button onClick={signInWithPasswordAuth}>Sign in</Button>
               </div>
             )}
           </div>
