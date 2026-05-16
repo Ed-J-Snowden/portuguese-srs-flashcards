@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RAW_INITIAL_CARDS } from "./data/initialCards";
+import { supabase } from "./supabaseClient";
 
-const STORAGE_KEY = "pt_srs_flashcards_v17_full_2761_voice_fix";
+const STORAGE_KEY = "pt_srs_flashcards_v18_full_2761_supabase";
 const TRANSLATION_NEEDED = "[translation needed]";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TEN_MINUTES_IN_DAYS = 10 / (24 * 60);
@@ -19,7 +20,7 @@ function makeId() {
 
 function makeCard(pt, en, example = "", id = makeId()) {
   return {
-    id,
+    id: String(id),
     pt: String(pt || "").trim(),
     en: String(en || "").trim(),
     example: String(example || "").trim(),
@@ -155,6 +156,61 @@ function filterCards(cards, query) {
   });
 }
 
+
+function applyCloudRows(cards, rows) {
+  const byId = new Map(cards.map((card) => [String(card.id), card]));
+  const deletedIds = new Set();
+
+  rows.forEach((row) => {
+    const cardId = String(row.card_id);
+
+    if (row.deleted) {
+      deletedIds.add(cardId);
+      byId.delete(cardId);
+      return;
+    }
+
+    const existing = byId.get(cardId);
+    const base = existing || makeCard(row.pt || "", row.en || TRANSLATION_NEEDED, row.example || "", cardId);
+    if (!base.pt) return;
+
+    byId.set(cardId, {
+      ...base,
+      pt: row.pt || base.pt,
+      en: row.en || base.en,
+      example: row.example ?? base.example ?? "",
+      ease: Number(row.ease ?? base.ease ?? 2.5),
+      interval: Number(row.interval ?? base.interval ?? 0),
+      repetitions: Number(row.repetitions ?? base.repetitions ?? 0),
+      due: Number(row.due ?? base.due ?? Date.now()),
+      lastReviewed: row.last_reviewed ?? base.lastReviewed ?? null,
+      correct: Number(row.correct ?? base.correct ?? 0),
+      wrong: Number(row.wrong ?? base.wrong ?? 0),
+    });
+  });
+
+  return Array.from(byId.values()).filter((card) => !deletedIds.has(String(card.id)));
+}
+
+function toCloudRow(card, userId, deleted = false) {
+  return {
+    user_id: userId,
+    card_id: String(card.id),
+    pt: card.pt,
+    en: card.en,
+    example: card.example || "",
+    ease: Number(card.ease ?? 2.5),
+    interval: Number(card.interval ?? 0),
+    repetitions: Number(card.repetitions ?? 0),
+    due: Number(card.due ?? Date.now()),
+    last_reviewed: card.lastReviewed ?? null,
+    correct: Number(card.correct ?? 0),
+    wrong: Number(card.wrong ?? 0),
+    deleted,
+    updated_at: Date.now(),
+  };
+}
+
 function runSelfTests() {
   const csv = parseImport(["olá,hello", "bom dia,good morning"].join(NEWLINE));
   console.assert(csv.length === 2, "CSV import should parse two cards");
@@ -204,6 +260,14 @@ function runSelfTests() {
   console.assert(Array.isArray(RAW_INITIAL_CARDS), "Initial deck should be an array");
   console.assert(RAW_INITIAL_CARDS.every((row) => Array.isArray(row) && row.length >= 2), "Each initial deck row should be [pt, en] or [pt, en, example]");
   console.assert(sampleCards.length === RAW_INITIAL_CARDS.length, "Initial deck should be converted into sample cards");
+
+  const cloudBase = [makeCard("o peito", "the chest", "", "1"), makeCard("o calcanhar", "the heel", "", "2")];
+  const cloudMerged = applyCloudRows(cloudBase, [{ card_id: "1", pt: "o peito", en: "the chest / breast", correct: 2, wrong: 1, deleted: false }]);
+  console.assert(cloudMerged.find((card) => card.id === "1").correct === 2, "Cloud state should merge review statistics");
+
+  const cloudDeleted = applyCloudRows(cloudBase, [{ card_id: "2", deleted: true }]);
+  console.assert(cloudDeleted.length === 1 && cloudDeleted[0].id === "1", "Cloud deleted state should hide deleted cards");
+
 
   const wrong = calculateNext(makeCard("teste", "test"), 0);
   console.assert(wrong.wrong === 1 && wrong.correct === 0, "Wrong review should increase wrong count only");
@@ -312,6 +376,9 @@ export default function PortugueseSRSFlashcards() {
   const [newEn, setNewEn] = useState("");
   const [newExample, setNewExample] = useState("");
   const [message, setMessage] = useState("");
+  const [syncStatus, setSyncStatus] = useState(supabase ? "Not signed in" : "Supabase not configured");
+  const [email, setEmail] = useState("");
+  const [session, setSession] = useState(null);
   const [voicesReady, setVoicesReady] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
@@ -344,6 +411,28 @@ export default function PortugueseSRSFlashcards() {
     };
   }, []);
 
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session || null);
+      setSyncStatus(data.session ? "Signed in" : "Not signed in");
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setSyncStatus(nextSession ? "Signed in" : "Not signed in");
+    });
+
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    loadCloudState();
+  }, [session?.user?.id]);
+
   const now = Date.now();
   const dueCards = useMemo(() => cards.filter((card) => (card.due ?? 0) <= now), [cards, now]);
   const current = useMemo(() => {
@@ -362,6 +451,74 @@ export default function PortugueseSRSFlashcards() {
     const wrong = cards.reduce((sum, card) => sum + (card.wrong ?? 0), 0);
     return correct + wrong ? Math.round((correct / (correct + wrong)) * 100) : 0;
   }, [cards]);
+
+
+  async function signInWithEmail() {
+    if (!supabase) {
+      setMessage("Supabase is not configured.");
+      return;
+    }
+    if (!email.trim()) {
+      setMessage("Enter your email address first.");
+      return;
+    }
+
+    setSyncStatus("Sending login link...");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+
+    if (error) {
+      setSyncStatus("Login failed");
+      setMessage(error.message);
+    } else {
+      setSyncStatus("Login link sent");
+      setMessage("Check your email for the Supabase login link.");
+    }
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setSession(null);
+    setSyncStatus("Signed out");
+  }
+
+  async function loadCloudState() {
+    if (!supabase || !session?.user?.id) return;
+    setSyncStatus("Syncing from cloud...");
+
+    const { data, error } = await supabase
+      .from("card_state")
+      .select("*")
+      .eq("user_id", session.user.id);
+
+    if (error) {
+      setSyncStatus("Cloud sync failed");
+      setMessage(error.message);
+      return;
+    }
+
+    setCards((prev) => applyCloudRows(prev, data || []));
+    setSyncStatus(`Synced ${data?.length || 0} cloud change${data?.length === 1 ? "" : "s"}`);
+  }
+
+  async function saveCardToCloud(card, deleted = false) {
+    if (!supabase || !session?.user?.id || !card?.id) return;
+
+    setSyncStatus("Saving...");
+    const { error } = await supabase
+      .from("card_state")
+      .upsert(toCloudRow(card, session.user.id, deleted), { onConflict: "user_id,card_id" });
+
+    if (error) {
+      setSyncStatus("Cloud save failed");
+      setMessage(error.message);
+    } else {
+      setSyncStatus("Saved to cloud");
+    }
+  }
 
   function getPortugueseVoice() {
     if (typeof window === "undefined" || !window.speechSynthesis) return null;
@@ -411,7 +568,9 @@ export default function PortugueseSRSFlashcards() {
 
   function review(quality) {
     if (!current) return;
-    setCards((prev) => prev.map((card) => (card.id === current.id ? calculateNext(card, quality) : card)));
+    const updated = calculateNext(current, quality);
+    setCards((prev) => prev.map((card) => (card.id === current.id ? updated : card)));
+    saveCardToCloud(updated);
     setShowAnswer(false);
     setMessage(quality < 3 ? "Marked wrong. This card will return soon." : "Review saved. Next interval updated.");
   }
@@ -422,7 +581,9 @@ export default function PortugueseSRSFlashcards() {
       return;
     }
 
-    setCards((prev) => mergeCardsWithoutDuplicates(prev, [makeCard(newPt, newEn, newExample)]));
+    const newCard = makeCard(newPt, newEn, newExample);
+    setCards((prev) => mergeCardsWithoutDuplicates(prev, [newCard]));
+    saveCardToCloud(newCard);
     setNewPt("");
     setNewEn("");
     setNewExample("");
@@ -436,6 +597,7 @@ export default function PortugueseSRSFlashcards() {
       return;
     }
     setCards((prev) => mergeCardsWithoutDuplicates(prev, imported));
+    imported.forEach((card) => saveCardToCloud(card));
     setMessage(`${imported.length} card${imported.length === 1 ? "" : "s"} processed. Existing duplicates are skipped automatically.`);
   }
 
@@ -478,7 +640,13 @@ export default function PortugueseSRSFlashcards() {
       setMessage("Another card already uses this Portuguese prompt.");
       return;
     }
+
+    const existing = cards.find((card) => card.id === editingId);
+    const updated = existing ? { ...existing, pt: editPt.trim(), en: editEn.trim(), example: editExample.trim() } : null;
+
     setCards((prev) => updateCardById(prev, editingId, { pt: editPt, en: editEn, example: editExample }));
+    if (updated) saveCardToCloud(updated);
+
     setEditingId(null);
     setEditPt("");
     setEditEn("");
@@ -499,12 +667,15 @@ export default function PortugueseSRSFlashcards() {
 
   function confirmDeleteCard(card) {
     setCards((prev) => deleteCardById(prev, card.id));
+    saveCardToCloud(card, true);
     setDeleteConfirmId(null);
     setMessage(`Deleted: ${card.pt}`);
   }
 
   function resetProgress() {
-    setCards((prev) => prev.map((card) => ({ ...card, ease: 2.5, interval: 0, repetitions: 0, due: Date.now(), lastReviewed: null, correct: 0, wrong: 0 })));
+    const resetCards = cards.map((card) => ({ ...card, ease: 2.5, interval: 0, repetitions: 0, due: Date.now(), lastReviewed: null, correct: 0, wrong: 0 }));
+    setCards(resetCards);
+    resetCards.forEach((card) => saveCardToCloud(card));
     setShowAnswer(false);
     setMessage("Progress reset. Cards are due now.");
   }
@@ -537,7 +708,7 @@ export default function PortugueseSRSFlashcards() {
         <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight md:text-4xl">Portuguese SRS Flashcards</h1>
-            <p className="mt-2 text-slate-600">PT-PT flashcards with spaced repetition, editing, imports and browser pronunciation.</p>
+            <p className="mt-2 text-slate-600">PT-PT flashcards with spaced repetition, editing, imports, browser pronunciation and lightweight cloud sync.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => setFrontMode(frontMode === "pt" ? "en" : "pt")}>↔ Front: {frontMode === "pt" ? "Portuguese" : "English"}</Button>
@@ -545,6 +716,27 @@ export default function PortugueseSRSFlashcards() {
             <Button variant="outline" onClick={exportCards}>↓ Export</Button>
           </div>
         </header>
+
+        <Panel className="p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="font-semibold">Cloud sync</div>
+              <div className="text-sm text-slate-500">{syncStatus}</div>
+            </div>
+            {session?.user ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-slate-500">{session.user.email}</span>
+                <Button variant="outline" onClick={loadCloudState}>Sync now</Button>
+                <Button variant="outline" onClick={signOut}>Sign out</Button>
+              </div>
+            ) : (
+              <div className="flex w-full gap-2 md:w-[420px]">
+                <TextInput placeholder="Email for Magic Link" value={email} onChange={(e) => setEmail(e.target.value)} />
+                <Button onClick={signInWithEmail}>Sign in</Button>
+              </div>
+            )}
+          </div>
+        </Panel>
 
         {message && <div className="rounded-2xl border bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">{message}</div>}
 
@@ -609,7 +801,7 @@ export default function PortugueseSRSFlashcards() {
               <h2 className="text-xl font-semibold">Progress controls</h2>
               <Button className="w-full" variant="outline" onClick={resetProgress}>Reset SRS progress</Button>
               <Button className="w-full" variant="outline" onClick={restoreSampleDeck}>Restore sample deck</Button>
-              <p className="text-xs text-slate-500">Data is saved locally in this browser. Export regularly for backup.</p>
+              <p className="text-xs text-slate-500">Data is saved locally first. When signed in, changes are also saved to Supabase.</p>
             </Panel>
           </aside>
         </div>
