@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RAW_INITIAL_CARDS } from "./data/initialCards";
 
-const STORAGE_KEY = "pt_srs_flashcards_v17_full_2761";
+const STORAGE_KEY = "pt_srs_flashcards_v17_full_2761_voice_fix";
 const TRANSLATION_NEEDED = "[translation needed]";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TEN_MINUTES_IN_DAYS = 10 / (24 * 60);
@@ -312,6 +312,7 @@ export default function PortugueseSRSFlashcards() {
   const [newEn, setNewEn] = useState("");
   const [newExample, setNewExample] = useState("");
   const [message, setMessage] = useState("");
+  const [voicesReady, setVoicesReady] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -326,6 +327,22 @@ export default function PortugueseSRSFlashcards() {
       setMessage("Could not save progress in this browser.");
     }
   }, [cards]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    function loadVoices() {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) setVoicesReady(true);
+    }
+
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
 
   const now = Date.now();
   const dueCards = useMemo(() => cards.filter((card) => (card.due ?? 0) <= now), [cards, now]);
@@ -346,16 +363,42 @@ export default function PortugueseSRSFlashcards() {
     return correct + wrong ? Math.round((correct / (correct + wrong)) * 100) : 0;
   }, [cards]);
 
+  function getPortugueseVoice() {
+    if (typeof window === "undefined" || !window.speechSynthesis) return null;
+    const voices = window.speechSynthesis.getVoices();
+    return (
+      voices.find((voice) => voice.lang === "pt-PT") ||
+      voices.find((voice) => voice.lang.toLowerCase().startsWith("pt-pt")) ||
+      voices.find((voice) => voice.lang.toLowerCase().startsWith("pt")) ||
+      null
+    );
+  }
+
   function speak(text) {
     if (!text || typeof window === "undefined" || !window.speechSynthesis) {
       setMessage("Speech is not available in this browser.");
       return;
     }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "pt-PT";
-    utterance.rate = 0.85;
-    window.speechSynthesis.speak(utterance);
+
+    const run = () => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "pt-PT";
+      utterance.rate = 0.85;
+
+      const voice = getPortugueseVoice();
+      if (voice) utterance.voice = voice;
+
+      utterance.onerror = () => setMessage("Speech failed. Try again or check your browser voice settings.");
+      window.speechSynthesis.speak(utterance);
+    };
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length === 0) {
+      setTimeout(run, 250);
+    } else {
+      run();
+    }
   }
 
   function revealAnswer() {
@@ -526,7 +569,7 @@ export default function PortugueseSRSFlashcards() {
                   <div className="text-3xl font-bold leading-tight md:text-5xl">{showAnswer ? backText : frontText}</div>
                   {showAnswer && current.example && <div className="mt-6 max-w-2xl text-lg italic text-slate-600">“{current.example}”</div>}
                   <div className="mt-8 flex flex-wrap justify-center gap-3">
-                    <Button variant="outline" onClick={() => speak(current.pt)}>🔊 Read Portuguese</Button>
+                    <Button variant="outline" onClick={() => speak(current.pt)}>🔊 Read Portuguese{voicesReady ? "" : ""}</Button>
                     <Button onClick={revealAnswer}>{showAnswer ? "Hide answer" : "Show answer"}</Button>
                   </div>
                 </div>
