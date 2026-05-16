@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RAW_INITIAL_CARDS } from "./data/initialCards";
 
-const STORAGE_KEY = "pt_srs_flashcards_v8_initial_deck_test";
+const STORAGE_KEY = "initialCards";
 const TRANSLATION_NEEDED = "[translation needed]";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TEN_MINUTES_IN_DAYS = 10 / (24 * 60);
