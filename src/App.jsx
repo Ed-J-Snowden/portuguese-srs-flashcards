@@ -370,6 +370,7 @@ export default function PortugueseSRSFlashcards() {
     }
   });
   const [showAnswer, setShowAnswer] = useState(false);
+  const [currentCardId, setCurrentCardId] = useState(null);
   const [frontMode, setFrontMode] = useState("en");
   const [importText, setImportText] = useState(["o peito", "o calcanhar", "Gelado de baunilha", "vir ao de cima", "palavra nova"].join(NEWLINE));
   const [newPt, setNewPt] = useState("");
@@ -435,12 +436,35 @@ export default function PortugueseSRSFlashcards() {
   }, [session?.user?.id]);
 
   const now = Date.now();
-  const dueCards = useMemo(() => cards.filter((card) => (card.due ?? 0) <= now), [cards, now]);
-  const current = useMemo(() => {
+  const dueCards = useMemo(
+    () => cards.filter((card) => (card.due ?? 0) <= now).sort((a, b) => (a.due ?? 0) - (b.due ?? 0)),
+    [cards, now]
+  );
+
+  const nextCard = useMemo(() => {
     if (!cards.length) return null;
     const ordered = [...cards].sort((a, b) => (a.due ?? 0) - (b.due ?? 0));
     return dueCards[0] || ordered[0];
   }, [cards, dueCards]);
+
+  const current = useMemo(() => {
+    if (!cards.length) return null;
+    const locked = currentCardId ? cards.find((card) => String(card.id) === String(currentCardId)) : null;
+    return locked || nextCard;
+  }, [cards, currentCardId, nextCard]);
+
+  useEffect(() => {
+    if (!currentCardId && nextCard) {
+      setCurrentCardId(nextCard.id);
+    }
+  }, [currentCardId, nextCard]);
+
+  useEffect(() => {
+    if (currentCardId && !cards.some((card) => String(card.id) === String(currentCardId))) {
+      setCurrentCardId(nextCard?.id ?? null);
+      setShowAnswer(false);
+    }
+  }, [cards, currentCardId, nextCard]);
   const sortedCards = useMemo(() => [...cards].sort((a, b) => (a.due ?? 0) - (b.due ?? 0)), [cards]);
   const visibleCards = useMemo(() => filterCards(sortedCards, searchQuery), [sortedCards, searchQuery]);
   const nextDue = sortedCards[0]?.due ?? null;
@@ -593,9 +617,27 @@ export default function PortugueseSRSFlashcards() {
 
   function review(quality) {
     if (!current) return;
+
     const updated = calculateNext(current, quality);
-    setCards((prev) => prev.map((card) => (card.id === current.id ? updated : card)));
-    saveCardToCloud(updated);
+    let nextId = null;
+
+    setCards((prev) => {
+      const updatedCards = prev.map((card) => (card.id === current.id ? updated : card));
+      const dueNow = updatedCards
+        .filter((card) => String(card.id) !== String(current.id) && (card.due ?? 0) <= Date.now())
+        .sort((a, b) => (a.due ?? 0) - (b.due ?? 0));
+      const ordered = updatedCards
+        .filter((card) => String(card.id) !== String(current.id))
+        .sort((a, b) => (a.due ?? 0) - (b.due ?? 0));
+      nextId = (dueNow[0] || ordered[0] || updated)?.id ?? null;
+      return updatedCards;
+    });
+
+    if (typeof saveCardToCloud === "function") {
+      saveCardToCloud(updated);
+    }
+
+    setCurrentCardId(nextId);
     setShowAnswer(false);
     setMessage(quality < 3 ? "Marked wrong. This card will return soon." : "Review saved. Next interval updated.");
   }
@@ -701,12 +743,14 @@ export default function PortugueseSRSFlashcards() {
     const resetCards = cards.map((card) => ({ ...card, ease: 2.5, interval: 0, repetitions: 0, due: Date.now(), lastReviewed: null, correct: 0, wrong: 0 }));
     setCards(resetCards);
     resetCards.forEach((card) => saveCardToCloud(card));
+    setCurrentCardId(null);
     setShowAnswer(false);
     setMessage("Progress reset. Cards are due now.");
   }
 
   function restoreSampleDeck() {
     setCards(sampleCards.map((card) => ({ ...card, due: Date.now() })));
+    setCurrentCardId(null);
     setShowAnswer(false);
     setMessage("Sample deck restored.");
   }
